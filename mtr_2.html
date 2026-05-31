@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MTR Next Train • 港鐵到站時間</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.6.0/css/all.min.css">
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; }
+    .train-card { transition: all 0.2s; }
+    .train-card:hover { transform: translateY(-2px); }
+    .eta-large { font-size: 2.75rem; line-height: 1; }
+    .accordion-content { max-height: 0; overflow: hidden; transition: max-height 0.3s ease-out; }
+    .accordion-content.open { max-height: 800px; }
+    
+    .modal {
+      animation: modalPop 0.3s ease-out forwards;
+    }
+    @keyframes modalPop {
+      from { opacity: 0; transform: scale(0.95) translateY(20px); }
+      to { opacity: 1; transform: scale(1) translateY(0); }
+    }
+    
+    .search-result:hover {
+      background-color: #27272a;
+    }
+    
+    .mtr-logo {
+      height: 48px;
+      width: auto;
+    }
+  </style>
+</head>
+<body class="bg-zinc-950 text-zinc-100 min-h-screen">
+
+  <div class="max-w-2xl mx-auto p-4">
+    <!-- Header with MTR Logo -->
+    <div class="flex flex-col items-center mb-8">
+      <img src="https://mtrtungchunglineextension.hk/wp-content/themes/mtr1/assets/image/MTR_logo.svg" 
+           alt="MTR Logo" 
+           class="mtr-logo mb-3">
+      <h1 class="text-3xl font-bold flex items-center gap-3 text-center">
+        Next Train
+      </h1>
+      <p class="text-zinc-400 text-center">港鐵實時到站時間</p>
+    </div>
+
+    <!-- Search Bar -->
+    <div class="relative mb-6">
+      <div class="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400">
+        <i class="fa-solid fa-magnifying-glass"></i>
+      </div>
+      <input 
+        id="search-input"
+        type="text" 
+        placeholder="Search station by name or code (e.g. Admiralty, ADM, Central)..."
+        class="w-full bg-zinc-900 border border-zinc-700 pl-11 pr-4 py-4 rounded-3xl focus:outline-none focus:border-emerald-500 text-base placeholder-zinc-500"
+        onkeyup="handleSearch(event)"
+      >
+      <div id="search-results" class="hidden absolute w-full mt-2 bg-zinc-900 border border-zinc-700 rounded-3xl shadow-2xl max-h-96 overflow-auto z-50 py-2"></div>
+    </div>
+
+    <!-- Accordion Lines -->
+    <div id="lines-accordion" class="space-y-3"></div>
+  </div>
+
+  <!-- Modal -->
+  <div id="modal" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+    <div class="modal bg-zinc-900 rounded-3xl max-w-lg w-full max-h-[90vh] overflow-hidden shadow-2xl">
+      
+      <!-- Modal Header -->
+      <div id="modal-header" class="p-6 border-b border-zinc-700 flex items-center justify-between">
+        <div id="modal-station-info"></div>
+        <button onclick="closeModal()" 
+                class="text-zinc-400 hover:text-white text-3xl leading-none">×</button>
+      </div>
+
+      <!-- Modal Content -->
+      <div class="p-6 overflow-y-auto max-h-[calc(90vh-140px)]" id="modal-content">
+        <!-- UP Direction -->
+        <div class="mb-8">
+          <div class="flex items-center gap-2 mb-4">
+            <div id="modal-up-bar" class="w-6 h-1 rounded"></div>
+            <h2 id="modal-up-direction" class="font-semibold text-xl">UP • 往</h2>
+          </div>
+          <div id="modal-up-trains" class="space-y-4"></div>
+        </div>
+
+        <!-- DOWN Direction -->
+        <div>
+          <div class="flex items-center gap-2 mb-4">
+            <div id="modal-down-bar" class="w-6 h-1 rounded"></div>
+            <h2 id="modal-down-direction" class="font-semibold text-xl">DOWN • 往</h2>
+          </div>
+          <div id="modal-down-trains" class="space-y-4"></div>
+        </div>
+      </div>
+
+      <!-- Modal Footer -->
+      <div class="p-5 border-t border-zinc-700 flex items-center justify-between bg-zinc-950">
+        <div id="modal-last-updated" class="text-emerald-400 text-sm font-mono"></div>
+        <button onclick="closeModal()" 
+                class="px-6 py-2 bg-zinc-800 hover:bg-zinc-700 rounded-2xl text-sm font-medium transition-colors">
+          Close
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Loading Overlay -->
+  <div id="loading" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+    <div class="text-center">
+      <i class="fa-solid fa-spinner fa-spin text-5xl text-emerald-500"></i>
+      <p class="mt-6 text-zinc-300">Loading real-time arrivals...</p>
+    </div>
+  </div>
+
+  <!-- Alert -->
+  <div id="alert" class="hidden fixed bottom-6 left-1/2 -translate-x-1/2 bg-amber-900 border border-amber-700 text-amber-200 rounded-2xl px-6 py-3 shadow-xl"></div>
+
+  <script>
+    // ==================== DATA (unchanged) ====================
+    const lines = [
+      { code: "TWL", name_en: "Tsuen Wan Line", name_tc: "荃灣線", color: "#ED1D24" },
+      { code: "ISL", name_en: "Island Line", name_tc: "港島線", color: "#007DC5" },
+      { code: "KTL", name_en: "Kwun Tong Line", name_tc: "觀塘線", color: "#00AB4E" },
+      { code: "TML", name_en: "Tuen Ma Line", name_tc: "屯馬線", color: "#923011" },
+      { code: "TKL", name_en: "Tseung Kwan O Line", name_tc: "將軍澳線", color: "#7D499D" },
+      { code: "EAL", name_en: "East Rail Line", name_tc: "東鐵線", color: "#53B7E8" },
+      { code: "SIL", name_en: "South Island Line", name_tc: "南港島線", color: "#BAC429" },
+      { code: "AEL", name_en: "Airport Express", name_tc: "機場快線", color: "#00888A" },
+      { code: "TCL", name_en: "Tung Chung Line", name_tc: "東涌線", color: "#F7943E" },
+      { code: "DRL", name_en: "Disneyland Resort Line", name_tc: "迪士尼線", color: "#F173AC" }
+    ];
+
+    const stationMap = {
+      "TWL": { "CEN":"Central", "ADM":"Admiralty", "TST":"Tsim Sha Tsui", "JOR":"Jordan", "YMT":"Yau Ma Tei", "MOK":"Mong Kok", "PRE":"Prince Edward", "SSP":"Sham Shui Po", "CSW":"Cheung Sha Wan", "LCK":"Lai Chi Kok", "MEF":"Mei Foo", "LAK":"Lai King", "KWF":"Kwai Fong", "KWH":"Kwai Hing", "TWH":"Tai Wo Hau", "TSW":"Tsuen Wan" },
+      "ISL": { "KET":"Kennedy Town", "HKU":"HKU", "SYP":"Sai Ying Pun", "SHW":"Sheung Wan", "CEN":"Central", "ADM":"Admiralty", "WAC":"Wan Chai", "CAB":"Causeway Bay", "TIH":"Tin Hau", "FOH":"Fortress Hill", "NOP":"North Point", "QUB":"Quarry Bay", "TAK":"Tai Koo", "SWH":"Sai Wan Ho", "SKW":"Shau Kei Wan", "HFC":"Heng Fa Chuen", "CHW":"Chai Wan" },
+      "KTL": { "WHA":"Whampoa", "HOM":"Ho Man Tin", "YMT":"Yau Ma Tei", "MOK":"Mong Kok", "PRE":"Prince Edward", "SKM":"Shek Kip Mei", "KOT":"Kowloon Tong", "LOF":"Lok Fu", "WTS":"Wong Tai Sin", "DIH":"Diamond Hill", "CHH":"Choi Hung", "KOB":"Kowloon Bay", "NTK":"Ngau Tau Kok", "KWT":"Kwun Tong", "LAT":"Lam Tin", "YAT":"Yau Tong", "TIK":"Tiu Keng Leng" },
+      "TML": { "WKS":"Wu Kai Sha", "MOS":"Ma On Shan", "HEO":"Heng On", "TSH":"Tai Shui Hang", "SHM":"Shek Mun", "CIO":"City One", "STW":"Sha Tin Wai", "CKT":"Che Kung Temple", "TAW":"Tai Wai", "HIK":"Hin Keng", "DIH":"Diamond Hill", "KAT":"Kai Tak", "SUW":"Sung Wong Toi", "TKW":"To Kwa Wan", "HOM":"Ho Man Tin", "HUH":"Hung Hom", "ETS":"East Tsim Sha Tsui", "AUS":"Austin", "NAC":"Nam Cheong", "MEF":"Mei Foo", "TWW":"Tsuen Wan West", "KSR":"Kam Sheung Road", "YUL":"Yuen Long", "LOP":"Long Ping", "TIS":"Tin Shui Wai", "SIH":"Siu Hong", "TUM":"Tuen Mun" },
+      "TKL": { "NOP":"North Point", "QUB":"Quarry Bay", "YAT":"Yau Tong", "TIK":"Tiu Keng Leng", "TKO":"Tseung Kwan O", "LHP":"LOHAS Park", "HAH":"Hang Hau", "POA":"Po Lam" },
+      "EAL": { "ADM":"Admiralty", "EXC":"Exhibition Centre", "HUH":"Hung Hom", "MKK":"Mong Kok East", "KOT":"Kowloon Tong", "TAW":"Tai Wai", "SHT":"Sha Tin", "FOT":"Fo Tan", "RAC":"Racecourse", "UNI":"University", "TAP":"Tai Po Market", "TWO":"Tai Wo", "FAN":"Fanling", "SHS":"Sheung Shui", "LOW":"Lo Wu", "LMC":"Lok Ma Chau" },
+      "SIL": { "ADM":"Admiralty", "OCP":"Ocean Park", "WCH":"Wong Chuk Hang", "LET":"Lei Tung", "SOH":"South Horizons" },
+      "AEL": { "HOK":"Hong Kong", "KOW":"Kowloon", "TSY":"Tsing Yi", "AIR":"Airport", "AWE":"AsiaWorld Expo", "OLY":"Olympic", "NAC":"Nam Cheong", "LAK":"Lai King", "SUN":"Sunny Bay", "TUC":"Tung Chung" },
+      "TCL": { "HOK":"Hong Kong", "KOW":"Kowloon", "OLY":"Olympic", "NAC":"Nam Cheong", "LAK":"Lai King", "TSY":"Tsing Yi", "SUN":"Sunny Bay", "TUC":"Tung Chung" },
+      "DRL": { "SUN":"Sunny Bay", "DIS":"Disneyland Resort" }
+    };
+
+    let currentLine = null;
+    let currentSta = null;
+    let refreshInterval = null;
+    let allStations = [];
+
+    function prepareAllStations() {
+      allStations = [];
+      lines.forEach(line => {
+        const stations = stationMap[line.code] || {};
+        Object.keys(stations).forEach(code => {
+          allStations.push({
+            lineCode: line.code,
+            lineName: line.name_en,
+            lineColor: line.color,
+            staCode: code,
+            staName: stations[code]
+          });
+        });
+      });
+    }
+
+    // ==================== SEARCH (unchanged) ====================
+    function handleSearch(e) {
+      const query = e.target.value.toLowerCase().trim();
+      const resultsContainer = document.getElementById("search-results");
+
+      if (query.length < 1) {
+        resultsContainer.classList.add("hidden");
+        return;
+      }
+
+      const filtered = allStations.filter(s => 
+        s.staName.toLowerCase().includes(query) || 
+        s.staCode.toLowerCase().includes(query)
+      ).slice(0, 12);
+
+      if (filtered.length === 0) {
+        resultsContainer.innerHTML = `<div class="px-6 py-8 text-center text-zinc-500">No stations found</div>`;
+      } else {
+        let html = '';
+        filtered.forEach(s => {
+          html += `
+            <div onclick="selectFromSearch('${s.lineCode}', '${s.staCode}', '${s.staName}', '${s.lineColor}', '${s.lineName}')" 
+                 class="search-result px-6 py-4 flex items-center gap-4 cursor-pointer hover:bg-zinc-800">
+              <div class="w-6 h-6 rounded-xl flex-shrink-0" style="background-color: ${s.lineColor}"></div>
+              <div class="flex-1">
+                <div class="font-medium">${s.staName}</div>
+                <div class="text-sm text-zinc-400">${s.staCode} • ${s.lineName}</div>
+              </div>
+            </div>
+          `;
+        });
+        resultsContainer.innerHTML = html;
+      }
+      resultsContainer.classList.remove("hidden");
+    }
+
+    function selectFromSearch(lineCode, staCode, staName, lineColor, lineName) {
+      document.getElementById("search-input").value = '';
+      document.getElementById("search-results").classList.add("hidden");
+      openStationModal(lineCode, staCode, staName, lineColor, lineName);
+    }
+
+    // ==================== ACCORDION & MODAL (same as previous version) ====================
+    function buildAccordion() {
+      const container = document.getElementById("lines-accordion");
+      container.innerHTML = "";
+
+      lines.forEach((line, index) => {
+        const isFirst = index === 0;
+        const lineDiv = document.createElement("div");
+        lineDiv.className = "bg-zinc-900 rounded-2xl overflow-hidden border border-zinc-800";
+
+        lineDiv.innerHTML = `
+          <button onclick="toggleAccordion(this)" 
+                  class="w-full px-5 py-4 flex items-center justify-between text-left hover:bg-zinc-800 transition-colors"
+                  data-line="${line.code}">
+            <div class="flex items-center gap-3">
+              <div class="w-5 h-5 rounded-full flex-shrink-0" style="background-color: ${line.color}"></div>
+              <div>
+                <span class="font-bold text-lg" style="color: ${line.color}">${line.code}</span>
+                <span class="ml-2 text-zinc-300">${line.name_en}</span>
+              </div>
+            </div>
+            <i class="fa-solid fa-chevron-down transition-transform ${isFirst ? 'rotate-180' : ''}"></i>
+          </button>
+          
+          <div class="accordion-content ${isFirst ? 'open' : ''}" id="content-${line.code}">
+            <div class="p-4 grid grid-cols-1 sm:grid-cols-2 gap-2" id="stations-${line.code}"></div>
+          </div>
+        `;
+
+        container.appendChild(lineDiv);
+
+        const stationsContainer = lineDiv.querySelector(`#stations-${line.code}`);
+        const stations = stationMap[line.code] || {};
+
+        Object.keys(stations).sort().forEach(staCode => {
+          const staName = stations[staCode];
+          const btn = document.createElement("button");
+          btn.className = `w-full text-left px-5 py-4 bg-zinc-800 hover:bg-zinc-700 rounded-2xl transition-all flex justify-between items-center group`;
+          btn.innerHTML = `
+            <div>
+              <span class="text-zinc-400 font-mono">${staCode}</span>
+              <span class="ml-2 font-medium text-white group-hover:text-emerald-400">${staName}</span>
+            </div>
+            <i class="fa-solid fa-chevron-right text-zinc-500 group-hover:text-emerald-400"></i>
+          `;
+          btn.onclick = () => openStationModal(line.code, staCode, staName, line.color, line.name_en);
+          stationsContainer.appendChild(btn);
+        });
+      });
+    }
+
+    function toggleAccordion(btn) {
+      const content = btn.nextElementSibling;
+      const icon = btn.querySelector("i");
+
+      document.querySelectorAll(".accordion-content").forEach(c => {
+        if (c !== content) c.classList.remove("open");
+      });
+      document.querySelectorAll(".accordion-content").forEach(c => {
+        const otherIcon = c.previousElementSibling?.querySelector("i");
+        if (otherIcon && c !== content) otherIcon.classList.remove("rotate-180");
+      });
+
+      content.classList.toggle("open");
+      icon.classList.toggle("rotate-180");
+    }
+
+    function openStationModal(lineCode, staCode, staName, lineColor, lineName) {
+      currentLine = lineCode;
+      currentSta = staCode;
+
+      document.getElementById("modal-station-info").innerHTML = `
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 rounded-2xl flex items-center justify-center text-xl font-bold" style="background-color: ${lineColor}30; color: ${lineColor}">
+            ${lineCode}
+          </div>
+          <div>
+            <div class="text-sm text-zinc-400">${lineName}</div>
+            <div class="text-2xl font-bold">${staName}</div>
+            <div class="text-zinc-500 text-sm">${staCode}</div>
+          </div>
+        </div>
+      `;
+
+      document.getElementById("modal").classList.remove("hidden");
+      document.getElementById("loading").classList.remove("hidden");
+
+      fetchSchedule(lineCode, staCode, staName, lineColor);
+    }
+
+    function closeModal() {
+      document.getElementById("modal").classList.add("hidden");
+      if (refreshInterval) {
+        clearInterval(refreshInterval);
+        refreshInterval = null;
+      }
+      document.getElementById("search-input").value = '';
+      document.getElementById("search-results").classList.add("hidden");
+    }
+
+    async function fetchSchedule(lineCode, staCode, staName, lineColor) {
+      try {
+        const url = `https://rt.data.gov.hk/v1/transport/mtr/getSchedule.php?line=${lineCode}&sta=${staCode}&lang=EN`;
+        const res = await fetch(url);
+        const data = await res.json();
+
+        if (data.status === 0) {
+          showAlert(data.message || "Service is currently suspended");
+          closeModal();
+          return;
+        }
+
+        renderModalContent(data, staName, lineColor);
+      } catch (err) {
+        console.error(err);
+        showAlert("Unable to load real-time data");
+        closeModal();
+      } finally {
+        document.getElementById("loading").classList.add("hidden");
+      }
+    }
+
+    function renderModalContent(data, staName, lineColor) {
+      const key = `${currentLine}-${currentSta}`;
+      const stationData = data.data[key] || {};
+
+      document.getElementById("modal-last-updated").textContent = `Updated ${new Date().toLocaleTimeString('en-GB')}`;
+
+      renderDirection("modal-up-trains", "modal-up-direction", "modal-up-bar", stationData.UP || [], "UP", lineColor);
+      renderDirection("modal-down-trains", "modal-down-direction", "modal-down-bar", stationData.DOWN || [], "DOWN", lineColor);
+
+      if (refreshInterval) clearInterval(refreshInterval);
+      refreshInterval = setInterval(() => fetchSchedule(currentLine, currentSta, staName, lineColor), 20000);
+    }
+
+    function renderDirection(containerId, directionId, barId, trains, dirCode, lineColor) {
+      const container = document.getElementById(containerId);
+      const dirEl = document.getElementById(directionId);
+      const barEl = document.getElementById(barId);
+
+      barEl.style.backgroundColor = lineColor;
+      dirEl.innerHTML = `${dirCode} • 往 <span class="text-zinc-400 text-sm">(${trains.length} trains)</span>`;
+
+      container.innerHTML = "";
+
+      if (trains.length === 0) {
+        container.innerHTML = `<div class="bg-zinc-950 border border-zinc-700 rounded-2xl p-8 text-center text-zinc-500">No upcoming trains in this direction</div>`;
+        return;
+      }
+
+      trains.forEach(train => {
+        const eta = train.ttnt === "0" ? "Arriving" : `${train.ttnt} min`;
+        const time = train.time ? new Date(train.time).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : "—";
+        const destName = stationMap[currentLine]?.[train.dest] || train.dest;
+
+        const div = document.createElement("div");
+        div.className = `train-card bg-zinc-800 border border-zinc-700 rounded-2xl p-5 flex items-center gap-6`;
+        div.innerHTML = `
+          <div class="text-center min-w-[60px]">
+            <div class="text-xs text-zinc-400">Platform</div>
+            <div class="text-5xl font-bold text-white">${train.plat || "?"}</div>
+          </div>
+          <div class="flex-1 min-w-0">
+            <div class="font-semibold text-lg text-emerald-400 truncate">${destName}</div>
+            <div class="text-sm text-zinc-400">${train.dest} • ${time}</div>
+          </div>
+          <div class="text-right">
+            <div class="eta-large font-bold ${train.ttnt === "0" ? 'text-emerald-400' : 'text-white'}">${eta}</div>
+            <div class="text-xs text-zinc-400 -mt-1">ETA</div>
+          </div>
+        `;
+        container.appendChild(div);
+      });
+    }
+
+    function showAlert(msg) {
+      const alertEl = document.getElementById("alert");
+      alertEl.textContent = msg;
+      alertEl.classList.remove("hidden");
+      setTimeout(() => alertEl.classList.add("hidden"), 4000);
+    }
+
+    document.getElementById("modal").addEventListener("click", function(e) {
+      if (e.target === this) closeModal();
+    });
+
+    // Initialize
+    window.onload = () => {
+      prepareAllStations();
+      buildAccordion();
+      
+      document.addEventListener("click", (e) => {
+        const searchResults = document.getElementById("search-results");
+        if (!e.target.closest("#search-input") && !e.target.closest("#search-results")) {
+          searchResults.classList.add("hidden");
+        }
+      });
+    };
+  </script>
+</body>
+</html>
